@@ -8,9 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/afterdarksys/sahrdp/internal/playback"
+	"github.com/ebitengine/oto/v3"
 	"image"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -43,7 +46,7 @@ func newWindow(a fyne.App, opts Options) fyne.Window {
 			w.SetFullScreen(!w.FullScreen())
 		}
 	})
-	status := widget.NewLabel("Ready · View only · Audio muted")
+	status := widget.NewLabel("Ready · View only")
 	status.Wrapping = fyne.TextWrapWord
 	picture := canvas.NewImageFromImage(image.NewRGBA(image.Rect(0, 0, 1, 1)))
 	picture.FillMode = canvas.ImageFillContain
@@ -62,11 +65,29 @@ func newWindow(a fyne.App, opts Options) fyne.Window {
 	info.Wrapping = fyne.TextWrapWord
 	form := container.NewVBox(widget.NewLabelWithStyle("SAH Remote Desktop", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), info,
 		widget.NewForm(widget.NewFormItem("Transport", executable), widget.NewFormItem("Arguments (JSON)", arguments)))
+	var audioEnabled atomic.Bool
+	var sound *playback.Buffer
+	audioStatus := widget.NewLabel("Audio muted")
+	audioToggle := widget.NewCheck("Play session audio", func(enabled bool) {
+		audioEnabled.Store(enabled)
+		if sound != nil {
+			sound.Mute(!enabled)
+		}
+		if enabled {
+			audioStatus.SetText("Audio enabled when granted by host")
+		} else {
+			audioStatus.SetText("Audio muted")
+		}
+	})
 	var cancel context.CancelFunc
 	var generation uint64
 	var connect, disconnect *widget.Button
 	stop := func() {
 		generation++
+		if sound != nil {
+			_ = sound.Close()
+			sound = nil
+		}
 		if cancel != nil {
 			cancel()
 			cancel = nil
@@ -75,7 +96,7 @@ func newWindow(a fyne.App, opts Options) fyne.Window {
 	connect = widget.NewButton("Connect", nil)
 	disconnect = widget.NewButton("Disconnect", func() {
 		stop()
-		status.SetText("Disconnected · View only · Audio muted")
+		status.SetText("Disconnected · View only")
 		picture.Image = image.NewRGBA(image.Rect(0, 0, 1, 1))
 		picture.Refresh()
 		form.Show()
@@ -88,13 +109,29 @@ func newWindow(a fyne.App, opts Options) fyne.Window {
 		id := generation
 		ctx, halt := context.WithCancel(context.Background())
 		cancel = halt
+		if audioEnabled.Load() {
+			audioStatus.SetText("Audio enabled when granted by host")
+		} else {
+			audioStatus.SetText("Audio muted")
+		}
+		buffer := playback.NewBuffer()
+		buffer.Mute(!audioEnabled.Load())
+		sound = buffer
 		connect.Disable()
 		disconnect.Enable()
 		form.Hide()
 		picture.Image = image.NewRGBA(image.Rect(0, 0, 1, 1))
 		picture.Refresh()
-		status.SetText("Connecting… · View only · Audio muted")
+		status.SetText("Connecting… · View only")
 		go func() {
+			var player *oto.Player
+			audioFailed := false
+			defer func() {
+				_ = buffer.Close()
+				if player != nil {
+					_ = player.Close()
+				}
+			}()
 			var r io.ReadCloser
 			var err error
 			if stdin {
@@ -113,6 +150,35 @@ func newWindow(a fyne.App, opts Options) fyne.Window {
 					}
 				}()
 				err = viewer.Read(ctx, r, func(u viewer.Update) {
+					if u.Audio != nil {
+						if audioEnabled.Load() && !audioFailed && ctx.Err() == nil {
+							if player == nil {
+								var audioErr error
+								player, audioErr = startAudio(ctx, buffer)
+								if audioErr != nil {
+									audioFailed = true
+									fyne.Do(func() {
+										if id == generation {
+											audioStatus.SetText("Audio unavailable on this device")
+										}
+									})
+								}
+							}
+							if player != nil {
+								if player.Err() != nil {
+									audioFailed = true
+									fyne.Do(func() {
+										if id == generation {
+											audioStatus.SetText("Audio unavailable on this device")
+										}
+									})
+									return
+								}
+								buffer.Push(*u.Audio)
+							}
+						}
+						return
+					}
 					// Backpressure bounds queued images even if rendering is slow.
 					fyne.DoAndWait(func() {
 						if id != generation || ctx.Err() != nil {
@@ -123,7 +189,10 @@ func newWindow(a fyne.App, opts Options) fyne.Window {
 							picture.Refresh()
 						}
 						if u.Status != nil {
-							status.SetText(fmt.Sprintf("Connected · %s · %d × %d · View only · Audio muted", u.Status.Actor, u.Status.Width, u.Status.Height))
+							if u.Status.Audio == 0 {
+								audioStatus.SetText("Audio not granted by host")
+							}
+							status.SetText(fmt.Sprintf("Connected · %s · %d × %d · View only", u.Status.Actor, u.Status.Width, u.Status.Height))
 						}
 						if u.Close != nil {
 							status.SetText("Session ended: " + u.Close.Reason + " · View only")
@@ -161,7 +230,7 @@ func newWindow(a fyne.App, opts Options) fyne.Window {
 		start(append([]string{executable.Text}, args...), false)
 	}
 	fullscreen := widget.NewButton("Fullscreen (F11)", func() { w.SetFullScreen(!w.FullScreen()) })
-	w.SetContent(container.NewBorder(container.NewVBox(form, container.NewHBox(connect, disconnect, fullscreen)), status, nil, nil, viewport))
+	w.SetContent(container.NewBorder(container.NewVBox(form, container.NewHBox(connect, disconnect, fullscreen, audioToggle, widget.NewButton("SAH applications…", func() { showApplications(a, w) }))), container.NewVBox(status, audioStatus), nil, nil, viewport))
 	w.SetOnClosed(stop)
 	if opts.Stdin || len(opts.Command) > 0 {
 		w.Show()

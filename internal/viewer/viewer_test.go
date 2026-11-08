@@ -160,3 +160,32 @@ func TestTransportStartFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestAudioRequiresGrantedStatus(t *testing.T) {
+	for _, grant := range []int{0, 1} {
+		var b bytes.Buffer
+		frame.Write(&b, frame.Hello, []byte(frame.HelloMagic))
+		st, _ := json.Marshal(session.Status{State: "connected", SessionID: "dsp_0123456789abcdef", Width: 4, Height: 4, Actor: "operator", MaxFPS: 5, MaxWidth: 1280, Audio: grant})
+		frame.Write(&b, frame.Status, st)
+		pcm := frame.PCM{Rate: 48000, Channels: 2, Format: 1, PCM: []byte{1, 2, 3, 4}}
+		payload, _ := frame.AppendAudio(pcm)
+		frame.Write(&b, frame.Audio, payload)
+		cl, _ := json.Marshal(session.Close{Reason: "closed", Bytes: int64(len(payload)), Digest: strings.Repeat("0", 64)})
+		frame.Write(&b, frame.Close, cl)
+		count := 0
+		err := Read(context.Background(), &b, func(u Update) {
+			if u.Audio != nil {
+				count++
+				if !reflect.DeepEqual(*u.Audio, pcm) {
+					t.Fatal("PCM changed")
+				}
+			}
+		})
+		if grant == 0 && (err == nil || count != 0) {
+			t.Fatal("ungranted audio delivered")
+		}
+		if grant == 1 && (err != nil || count != 1) {
+			t.Fatalf("audio missing: %v, %d", err, count)
+		}
+	}
+}

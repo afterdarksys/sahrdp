@@ -21,9 +21,10 @@ type Update struct {
 	Status *session.Status
 	Image  image.Image
 	Close  *session.Close
+	Audio  *frame.PCM
 }
 
-// Read consumes a live stream. Audio is validated but currently muted.
+// Read consumes a live stream and emits only validated media.
 // The caller owns r and must close it to interrupt a blocked read.
 func Read(ctx context.Context, r io.Reader, emit func(Update)) error {
 	c := session.NewClient(r)
@@ -58,6 +59,8 @@ func Read(ctx context.Context, r io.Reader, emit func(Update)) error {
 			draw.Draw(next, rect, tile, tile.Bounds().Min, draw.Src)
 			screen = next
 			emit(Update{Image: next})
+		case frame.Audio:
+			emit(Update{Audio: ev.Audio})
 		case frame.Close:
 			emit(Update{Close: ev.Close})
 			return nil

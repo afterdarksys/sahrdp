@@ -1,5 +1,9 @@
 # Display channel plan
 
+> Historical bootstrap proposal. The product direction authorized November 8,
+> 2026 is now tracked in [GUI_ROADMAP.md](GUI_ROADMAP.md). This document describes
+> the original view-only milestone; PROTOCOL.md remains the current wire contract.
+
 Status: the control plane is not wired, 2026-11-07. This directory has the sahrdp/1 host daemon and operator client. Their local contract is PROTOCOL.md. Audio there is a leased bit. Clipboard, printers, and drive redirection stay out. systemapi.io is unchanged. `~/development/systemapi.io/docs/sah-suite.md` is the authority on what exists today. This file stays the proposal for the GUI pillar. It becomes the brief for a protocol contract only after the decisions in §2 are marked.
 
 Mark each row in §2 with `OK` or a replacement. An unmarked row is not approved. When the marks are in, the next session writes `systemapi.io/docs/sah-display-protocol.md` and wires the control plane from that contract. The helper in this directory is not that wiring.
